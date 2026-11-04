@@ -23,14 +23,39 @@ const INITIAL_SKILLS = [
   {
     id: 1,
     name: 'Trợ lý Soạn thảo Văn bản',
-    desc: 'Soạn thảo văn bản hành chính theo quy chuẩn nhà nước, nghị định 30/2020/NĐ-CP.',
+    desc: 'Soạn thảo văn bản hành chính theo thể thức chuẩn Nghị định 30/2020/NĐ-CP (Công văn, Tờ trình, Quyết định, Báo cáo, Kế hoạch...).',
     tag: 'Hành chính',
     installed: true,
-    systemInstruction: 'Bạn là chuyên viên hành chính cao cấp am hiểu Nghị định 30/2020/NĐ-CP. Hãy hỗ trợ soạn thảo văn bản quy phạm, công văn, tờ trình hoặc thông báo với văn phong chuẩn mực, trang trọng và chính xác.',
+    systemInstruction: `[Vai trò]: Bạn là một Chuyên viên Hành chính Tổng hợp kiêm Trợ lý Soạn thảo Văn bản xuất sắc. Bạn nắm thuộc lòng và áp dụng chuẩn xác Nghị định 30/2020/NĐ-CP của Chính phủ Việt Nam về thể thức và kỹ thuật trình bày văn bản hành chính.
+
+[Bối cảnh]: Thường xuyên soạn thảo các loại văn bản nhà nước (Công văn, Tờ trình, Báo cáo, Quyết định, Thông báo, Kế hoạch...) từ những ý tưởng thô hoặc gạch đầu dòng ngắn gọn để có thể copy/paste ngay ra Word, in ấn và trình ký.
+
+[Nhiệm vụ]: Khi nhận loại văn bản cần soạn và thông tin cốt lõi, hãy viết một văn bản hành chính hoàn chỉnh, đảm bảo đầy đủ các thành phần thể thức theo quy định.
+
+[Quy tắc/Ràng buộc]:
+- Tuân thủ tuyệt đối cấu trúc của Nghị định 30/2020/NĐ-CP (bao gồm: Quốc hiệu, Tiêu ngữ, Tên cơ quan ban hành, Số/Ký hiệu, Địa danh, Ngày tháng năm, Trích yếu nội dung, Kính gửi, Nội dung văn bản, Chức danh người ký và Chữ ký, Nơi nhận).
+- Sử dụng văn phong hành chính nhà nước: Trang trọng, khách quan, chính xác, súc tích, mạch lạc. Tuyệt đối không dùng từ ngữ đa nghĩa, từ lóng, biểu cảm hay ngôn ngữ giao tiếp hàng ngày.
+- Bố cục nội dung logic: Đặt vấn đề (Căn cứ pháp lý) -> Nội dung chính (Quy định/Chỉ đạo/Đề xuất cụ thể) -> Kết luận/Tổ chức thực hiện.
+- Nếu thông tin người dùng cung cấp bị thiếu các căn cứ pháp lý cần thiết, hãy tự động chèn placeholder (ví dụ: [Căn cứ Luật...], [Căn cứ Nghị định...], [Căn cứ Quyết định số...]) để người dùng dễ dàng bổ sung sau.
+
+[Định dạng]: Trình bày dưới dạng Markdown mô phỏng trực quan bố cục trang giấy hành chính chuẩn (in đậm, in nghiêng đúng vị trí theo Nghị định 30/2020/NĐ-CP):
+- Quốc hiệu: IN HOA, ĐỨNG, ĐẬM (ví dụ: **CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM**)
+- Tiêu ngữ: Chữ in thường, đứng, đậm (ví dụ: **Độc lập - Tự do - Hạnh phúc**)
+- Tên cơ quan ban hành: IN HOA, ĐỨNG
+- Địa danh, ngày tháng năm: Chữ in thường, nghiêng (*..., ngày ... tháng ... năm ...*)
+- Trích yếu / Tên loại văn bản: IN HOA, ĐỨNG, ĐẬM
+- Kính gửi: Chữ in thường, đậm
+- Nơi nhận: In đậm, nghiêng phần tiêu đề, gạch đầu dòng danh sách đơn vị nhận.
+
+[Dữ liệu đầu vào]:
+- Loại văn bản: {Ví dụ: Công văn / Tờ trình}
+- Đơn vị ban hành: {Tên cơ quan của bạn}
+- Đơn vị nhận (Kính gửi): {Tên cơ quan/cá nhân nhận}
+- Nội dung chính cần truyền đạt: {Gạch đầu dòng các ý chính}.`,
     tools: [
       {
         name: 'format_document',
-        description: 'Định dạng và kiểm tra tiêu đề, số ký hiệu, nơi nhận theo thể thức chuẩn.'
+        description: 'Định dạng và kiểm tra tiêu đề, số ký hiệu, nơi nhận theo thể thức chuẩn Nghị định 30/2020/NĐ-CP.'
       }
     ]
   },
@@ -79,7 +104,20 @@ export default function App() {
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed;
+            // Cập nhật cấu hình mặc định mới nhất, giữ nguyên trạng thái cài đặt của người dùng
+            const merged = parsed.map(skill => {
+              const defaultSkill = INITIAL_SKILLS.find(d => d.id === skill.id);
+              if (defaultSkill) {
+                return { ...defaultSkill, installed: skill.installed };
+              }
+              return skill;
+            });
+            INITIAL_SKILLS.forEach(defaultSkill => {
+              if (!merged.some(s => s.id === defaultSkill.id)) {
+                merged.push(defaultSkill);
+              }
+            });
+            return merged;
           }
         }
       }
@@ -238,7 +276,44 @@ export default function App() {
         const tag = currentSkill?.tag || '';
 
         if (tag === 'Hành chính') {
-          simulatedReply = `[Soạn thảo theo Nghị định 30/2020/NĐ-CP]\n\nCỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n---------------------\n\nKính gửi: Các cơ quan, đơn vị liên quan.\n\nVề việc: ${userText}\n\n1. Căn cứ chức năng, nhiệm vụ và quyền hạn được giao...\n2. Đề nghị thủ trưởng các đơn vị phối hợp triển khai nghiêm túc nội dung trên.\n\n(Chế độ thử nghiệm không dùng API Key - Nhập Gemini API Key ở thanh phía trên để kết nối AI thực tế).`;
+          simulatedReply = `**[TÊN CƠ QUAN CHỦ QUẢN]**               **CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM**
+**[TÊN CƠ QUAN BAN HÀNH]**                    **Độc lập - Tự do - Hạnh phúc**
+Số: .../...-[Ký hiệu]                     *[Địa danh], ngày ... tháng ... năm ...*
+
+<div align="center">
+
+### **CÔNG VĂN**
+**Về việc: ${userText.replace(/[\n\r]+/g, ' ').slice(0, 100)}**
+
+</div>
+
+**Kính gửi:** [Tên cơ quan / cá nhân nhận văn bản]
+
+- [Căn cứ Luật Tổ chức chính quyền địa phương / Luật chuyên ngành liên quan...];
+- [Căn cứ Nghị định số 30/2020/NĐ-CP ngày 05/3/2020 của Chính phủ về công tác văn thư];
+- [Căn cứ Quyết định số .../... của ... quy định chức năng, nhiệm vụ, quyền hạn...];
+
+Thực hiện nhiệm vụ được giao, [Tên cơ quan ban hành] kính gửi Quý cơ quan/đơn vị nội dung phối hợp triển khai như sau:
+
+**1. Về nội dung trọng tâm:**
+- Yêu cầu thực hiện: ${userText}
+- Đề nghị các phòng, ban chuyên môn trực thuộc chủ động xây dựng phương án, phân công nhân sự cụ thể để triển khai đúng tiến độ.
+
+**2. Về thời hạn và trách nhiệm thực hiện:**
+- Báo cáo kết quả gửi về [Tên cơ quan ban hành] trước ngày [Thời hạn].
+- Trong quá trình triển khai, nếu phát sinh khó khăn, vướng mắc, kịp thời phản hồi để phối hợp giải quyết.
+
+Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
+
+**Nơi nhận:**                                        **[CHỨC DANH NGƯỜI KÝ]**
+- Như trên;                                         *(Ký, ghi rõ họ tên và đóng dấu)*
+- Lãnh đạo cơ quan (để b/c);
+- Lưu: VT, [Đơn vị soạn thảo].
+
+                                                    **[HỌ VÀ TÊN]**
+
+---
+*(Lưu ý: Đây là văn bản mô phỏng chuẩn Nghị định 30/2020/NĐ-CP. Nhập Gemini API Key ở thanh phía trên để kết nối AI phân tích chi tiết theo loại văn bản và nội dung thực tế của bạn).*`;
         } else if (tag === 'Truyền thông') {
           simulatedReply = `📢 [BẢN TIN NÓNG HỔI / ZALO OA]\n\n✨ ${userText.toUpperCase()} ✨\n\n👉 Bạn đã cập nhật thông tin mới nhất hôm nay chưa?\n🔹 Điểm nhấn 1: Nhanh chóng - Tiện lợi - Chuẩn xác.\n🔹 Điểm nhấn 2: Tối ưu hiệu suất công việc cùng Gemini AI.\n\n👇 Để lại bình luận hoặc nhắn tin trực tiếp để được tư vấn ngay nhé!\n#GeminiSkillHub #TruyenThong #AI`;
         } else if (tag === 'Năng suất') {
@@ -586,19 +661,53 @@ export default function App() {
                 <div ref={messagesEndRef} />
               </div>
 
+              {/* Quick Template Chips */}
+              {currentSkill?.tag === 'Hành chính' && (
+                <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 flex items-center gap-2 overflow-x-auto text-xs">
+                  <span className="text-slate-400 font-medium whitespace-nowrap">Mẫu nhanh NĐ 30:</span>
+                  <button
+                    type="button"
+                    onClick={() => setInputMessage("- Loại văn bản: Công văn\n- Đơn vị ban hành: Sở Thông tin và Truyền thông\n- Đơn vị nhận (Kính gửi): Các Sở, Ban, Ngành và UBND các huyện, thị xã\n- Nội dung chính cần truyền đạt: Triển khai rà soát hệ thống kỹ thuật và bảo đảm an toàn thông tin mạng trong quý 4/2026.")}
+                    className="px-2.5 py-1 rounded-md bg-white border border-slate-200 hover:border-blue-400 hover:text-blue-600 text-slate-600 transition whitespace-nowrap shadow-sm"
+                  >
+                    📄 Công văn đôn đốc
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInputMessage("- Loại văn bản: Tờ trình\n- Đơn vị ban hành: Phòng Kế hoạch - Tài chính\n- Đơn vị nhận (Kính gửi): Ban Giám đốc Sở\n- Nội dung chính cần truyền đạt: Xin phê duyệt dự toán kinh phí nâng cấp hạ tầng công nghệ thông tin phục vụ chuyển đổi số năm 2026.")}
+                    className="px-2.5 py-1 rounded-md bg-white border border-slate-200 hover:border-blue-400 hover:text-blue-600 text-slate-600 transition whitespace-nowrap shadow-sm"
+                  >
+                    📝 Tờ trình phê duyệt
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInputMessage("- Loại văn bản: Thông báo\n- Đơn vị ban hành: Văn phòng cơ quan\n- Đơn vị nhận (Kính gửi): Toàn thể cán bộ, công chức, viên chức cơ quan\n- Nội dung chính cần truyền đạt: Lịch làm việc và phân công trực cơ quan, bảo đảm an ninh trật tự.")}
+                    className="px-2.5 py-1 rounded-md bg-white border border-slate-200 hover:border-blue-400 hover:text-blue-600 text-slate-600 transition whitespace-nowrap shadow-sm"
+                  >
+                    📢 Thông báo nội bộ
+                  </button>
+                </div>
+              )}
+
               {/* Chat Input */}
-              <form onSubmit={handleSendMessage} className="p-4 bg-white border-t border-slate-200 flex gap-2">
-                <input
-                  type="text"
+              <form onSubmit={handleSendMessage} className="p-4 bg-white border-t border-slate-200 flex items-end gap-2">
+                <textarea
+                  rows="2"
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
-                  placeholder={`Gửi yêu cầu thử nghiệm cho "${currentSkill?.name || 'Trợ lý'}"... (Nhấn Enter để gửi)`}
-                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage(e);
+                    }
+                  }}
+                  placeholder={`Gửi yêu cầu thử nghiệm cho "${currentSkill?.name || 'Trợ lý'}"... (Shift+Enter để xuống dòng, Enter để gửi)`}
+                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition resize-none"
                 />
                 <button
                   type="submit"
                   disabled={!inputMessage.trim() || isLoading}
-                  className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-medium text-sm flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-md shadow-blue-600/20"
+                  className="bg-blue-600 text-white px-5 py-3 rounded-xl font-medium text-sm flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-md shadow-blue-600/20 self-stretch justify-center"
                 >
                   <span>Gửi</span>
                   <Send size={15} />
