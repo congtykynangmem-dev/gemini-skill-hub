@@ -16,7 +16,11 @@ import {
   Search, 
   ArrowRight,
   ShieldCheck,
-  FileCode
+  FileCode,
+  Edit3,
+  Upload,
+  X,
+  RefreshCw
 } from 'lucide-react';
 
 const INITIAL_SKILLS = [
@@ -145,6 +149,11 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState('Tất cả');
 
+  // Edit Skill Modal State
+  const [editingSkill, setEditingSkill] = useState(null);
+  const [editingToolsText, setEditingToolsText] = useState('');
+  const fileInputRef = useRef(null);
+
   // Create Skill Form State
   const [newSkillName, setNewSkillName] = useState('');
   const [newSkillTag, setNewSkillTag] = useState('Hành chính');
@@ -221,6 +230,142 @@ export default function App() {
     a.click();
     URL.revokeObjectURL(url);
     showToast(`Đã xuất cấu hình JSON cho "${skill.name}"`);
+  };
+
+  const handleOpenEditModal = (skill) => {
+    if (!skill) return;
+    setEditingSkill({ ...skill });
+    setEditingToolsText(skill.tools && skill.tools.length > 0 ? JSON.stringify(skill.tools, null, 2) : '');
+  };
+
+  const handleSaveEditSkill = (e) => {
+    e.preventDefault();
+    if (!editingSkill || !editingSkill.name.trim()) {
+      showToast('Tên kỹ năng không được để trống!', 'error');
+      return;
+    }
+
+    let parsedTools = [];
+    if (editingToolsText.trim()) {
+      try {
+        parsedTools = JSON.parse(editingToolsText.trim());
+        if (!Array.isArray(parsedTools)) parsedTools = [parsedTools];
+      } catch (err) {
+        showToast('Lỗi định dạng Tools JSON: Vui lòng nhập đúng cú pháp!', 'error');
+        return;
+      }
+    }
+
+    const updatedSkill = {
+      ...editingSkill,
+      name: editingSkill.name.trim(),
+      tag: editingSkill.tag || 'Khác',
+      desc: (editingSkill.desc || '').trim(),
+      systemInstruction: (editingSkill.systemInstruction || '').trim(),
+      tools: parsedTools
+    };
+
+    setSkills(prev => (Array.isArray(prev) ? prev : INITIAL_SKILLS).map(s => {
+      if (s && s.id === updatedSkill.id) {
+        return updatedSkill;
+      }
+      return s;
+    }));
+
+    // Thông báo cho cuộc trò chuyện nếu đang mở kỹ năng này trong playground
+    if (selectedSkillId === updatedSkill.id) {
+      setMessages(prev => [
+        ...prev,
+        {
+          id: Date.now(),
+          role: 'assistant',
+          content: `⚙️ [Hệ thống]: Kỹ năng "${updatedSkill.name}" đã được cập nhật chỉ thị prompt mới! Bạn có thể gửi yêu cầu để kiểm tra ngay.`
+        }
+      ]);
+    }
+
+    showToast(`Đã lưu thay đổi cho kỹ năng "${updatedSkill.name}"!`);
+    setEditingSkill(null);
+  };
+
+  const handleResetToDefault = () => {
+    if (!editingSkill) return;
+    const original = INITIAL_SKILLS.find(d => d.id === editingSkill.id);
+    if (original) {
+      setEditingSkill({ ...original });
+      setEditingToolsText(original.tools && original.tools.length > 0 ? JSON.stringify(original.tools, null, 2) : '');
+      showToast('Đã khôi phục thông số kỹ năng về bản gốc mặc định.');
+    }
+  };
+
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const raw = event.target?.result;
+        const parsed = JSON.parse(raw);
+        const items = Array.isArray(parsed) ? parsed : [parsed];
+        const newItems = items.map((item, idx) => ({
+          id: item.id && typeof item.id === 'number' ? item.id : Date.now() + idx,
+          name: item.name || item.title || 'Kỹ năng mới',
+          tag: item.tag || item.category || 'Tùy chỉnh',
+          desc: item.desc || item.description || 'Kỹ năng được nhập từ file JSON.',
+          systemInstruction: item.systemInstruction || item.prompt || item.instruction || 'Bạn là trợ lý AI chuyên nghiệp.',
+          tools: Array.isArray(item.tools) ? item.tools : [],
+          installed: true
+        }));
+
+        setSkills(prev => {
+          const prevList = Array.isArray(prev) ? prev : INITIAL_SKILLS;
+          const existingIds = new Set(newItems.map(n => n.id));
+          const filteredPrev = prevList.filter(p => !existingIds.has(p.id));
+          return [...newItems, ...filteredPrev];
+        });
+
+        showToast(`Đã nhập thành công ${newItems.length} kỹ năng vào Hub!`);
+      } catch (err) {
+        showToast('Lỗi đọc file JSON: Cú pháp không hợp lệ!', 'error');
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleExportAll = () => {
+    const exportData = safeSkills.map(s => ({
+      schema_version: "1.0",
+      type: "gemini_agent_skill",
+      id: s.id,
+      name: s.name,
+      tag: s.tag,
+      description: s.desc,
+      systemInstruction: s.systemInstruction,
+      tools: s.tools || []
+    }));
+    const data = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gemini-skills-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Đã xuất toàn bộ ${exportData.length} kỹ năng thành file JSON!`);
+  };
+
+  const handleDeleteSkill = (skillId, skillName) => {
+    if (INITIAL_SKILLS.some(d => d.id === skillId)) {
+      showToast('Không thể xóa kỹ năng mặc định của hệ thống!', 'error');
+      return;
+    }
+    if (window.confirm(`Bạn có chắc muốn xóa kỹ năng "${skillName}" không?`)) {
+      setSkills(prev => (Array.isArray(prev) ? prev : INITIAL_SKILLS).filter(s => s.id !== skillId));
+      showToast(`Đã xóa kỹ năng "${skillName}"!`);
+    }
   };
 
   const handleSendMessage = async (e) => {
@@ -478,20 +623,51 @@ Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
           {/* TAB 1: SKILL HUB */}
           {activeTab === 'hub' && (
             <div className="space-y-6 max-w-7xl mx-auto">
-              {/* Search & Tag Bar */}
-              <div className="flex flex-col md:flex-row gap-4 items-center justify-between bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                <div className="relative w-full md:w-96">
-                  <Search className="absolute left-3.5 top-3 text-slate-400" size={16} />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Tìm kiếm kỹ năng hoặc tính năng..."
-                    className="w-full pl-10 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-                  />
+              {/* Search & Tag Bar & Actions */}
+              <div className="flex flex-col gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex flex-col md:flex-row gap-3 items-center justify-between">
+                  <div className="relative w-full md:w-96">
+                    <Search className="absolute left-3.5 top-3 text-slate-400" size={16} />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Tìm kiếm kỹ năng hoặc tính năng..."
+                      className="w-full pl-10 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleImportFile}
+                      accept=".json"
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-3 py-2 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded-lg flex items-center gap-1.5 transition shadow-sm"
+                      title="Nạp kỹ năng từ file JSON tải về hoặc có sẵn"
+                    >
+                      <Upload size={14} />
+                      <span>Nhập JSON (Import)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleExportAll}
+                      className="px-3 py-2 text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg flex items-center gap-1.5 transition shadow-sm"
+                      title="Tải toàn bộ danh sách kỹ năng thành 1 file JSON"
+                    >
+                      <Download size={14} />
+                      <span>Sao lưu tất cả</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex flex-wrap gap-1.5 w-full md:w-auto">
+                <div className="flex flex-wrap gap-1.5 pt-2 border-t border-slate-100">
                   {tags.map(tag => (
                     <button
                       key={tag}
@@ -520,12 +696,28 @@ Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
                         </span>
                         <div className="flex items-center gap-1">
                           <button
+                            onClick={() => handleOpenEditModal(skill)}
+                            className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition"
+                            title="Điều chỉnh trực tiếp prompt và cấu hình"
+                          >
+                            <Edit3 size={16} />
+                          </button>
+                          <button
                             onClick={() => downloadConfig(skill)}
                             className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
                             title="Tải cấu hình JSON"
                           >
-                            <Download size={18} />
+                            <Download size={16} />
                           </button>
+                          {!INITIAL_SKILLS.some(d => d.id === skill.id) && (
+                            <button
+                              onClick={() => handleDeleteSkill(skill.id, skill.name)}
+                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                              title="Xóa kỹ năng tùy chỉnh này"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -587,7 +779,7 @@ Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
             <div className="max-w-5xl mx-auto h-[calc(100vh-140px)] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
               {/* Toolbar */}
               <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row gap-3 items-center justify-between">
-                <div className="flex items-center gap-3 w-full sm:w-auto">
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                   <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Kỹ năng đang chọn:</label>
                   <select
                     value={selectedSkillId}
@@ -600,6 +792,16 @@ Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
                       </option>
                     ))}
                   </select>
+
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditModal(currentSkill)}
+                    className="px-2.5 py-1.5 text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 rounded-lg flex items-center gap-1.5 transition shadow-sm whitespace-nowrap"
+                    title="Chỉnh sửa trực tiếp prompt & tham số của kỹ năng này để dùng ngay"
+                  >
+                    <Edit3 size={14} />
+                    <span>Sửa Prompt trực tiếp</span>
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -830,6 +1032,136 @@ Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
           )}
         </div>
       </div>
+
+      {/* Edit Skill Modal */}
+      {editingSkill && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shadow-sm">
+                  <Edit3 size={17} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-base">Điều Chỉnh Kỹ Năng Trực Tiếp</h3>
+                  <p className="text-xs text-slate-500">Chỉnh sửa sẽ lưu vào máy và áp dụng ngay trong Playground</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingSkill(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditSkill} className="p-6 overflow-y-auto space-y-4 flex-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Tên Kỹ năng <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingSkill.name || ''}
+                    onChange={(e) => setEditingSkill({ ...editingSkill, name: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg px-3.5 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Phân loại (Tag)
+                  </label>
+                  <input
+                    type="text"
+                    value={editingSkill.tag || 'Hành chính'}
+                    onChange={(e) => setEditingSkill({ ...editingSkill, tag: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg px-3.5 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    placeholder="VD: Hành chính, Truyền thông..."
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                  Mô tả ngắn gọn
+                </label>
+                <input
+                  type="text"
+                  value={editingSkill.desc || ''}
+                  onChange={(e) => setEditingSkill({ ...editingSkill, desc: e.target.value })}
+                  className="w-full border border-slate-200 rounded-lg px-3.5 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+                    System Instruction (Chỉ thị cốt lõi / Prompt Persona) <span className="text-red-500">*</span>
+                  </label>
+                  <span className="text-[11px] text-blue-600 font-medium">Áp dụng trực tiếp cho Gemini</span>
+                </div>
+                <textarea
+                  rows="9"
+                  required
+                  value={editingSkill.systemInstruction || ''}
+                  onChange={(e) => setEditingSkill({ ...editingSkill, systemInstruction: e.target.value })}
+                  className="w-full border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono bg-slate-50/50"
+                  placeholder="[Vai trò]: ...&#10;[Bối cảnh]: ...&#10;[Nhiệm vụ]: ...&#10;[Quy tắc/Ràng buộc]: ..."
+                ></textarea>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Tools & Schema (JSON - Tùy chọn)
+                  </label>
+                  <span className="text-[11px] text-slate-400">Định dạng mảng object JSON</span>
+                </div>
+                <textarea
+                  rows="3"
+                  value={editingToolsText}
+                  onChange={(e) => setEditingToolsText(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg p-2.5 text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none bg-slate-50/50"
+                  placeholder="[]"
+                ></textarea>
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 flex items-center justify-between">
+                {INITIAL_SKILLS.some(d => d.id === editingSkill.id) ? (
+                  <button
+                    type="button"
+                    onClick={handleResetToDefault}
+                    className="text-xs text-amber-600 hover:text-amber-700 hover:underline flex items-center gap-1 font-medium"
+                  >
+                    <RefreshCw size={12} />
+                    <span>Khôi phục bản gốc ban đầu</span>
+                  </button>
+                ) : <div />}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingSkill(null)}
+                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition"
+                  >
+                    <Check size={14} />
+                    <span>Lưu & Áp Dụng Ngay</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
