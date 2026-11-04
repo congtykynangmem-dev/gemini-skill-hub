@@ -23,12 +23,17 @@ export default defineConfig({
           const scriptMatch = content.match(/<script[^>]*>([\s\S]*?)<\/script>/)
           if (scriptMatch) {
             const scriptContent = scriptMatch[1]
-            // Xóa script khỏi vị trí hiện tại (thường là trong head)
+            // Xóa script khỏi vị trí hiện tại (trong head)
             content = content.replace(scriptMatch[0], '')
             
-            // Đặt script vào cuối body (ngay trước </body>) dưới dạng script thuần túy
+            // Đặt script vào cuối body (ngay trước thẻ </body> CUỐI CÙNG của HTML)
+            const lastBodyIdx = content.lastIndexOf('</body>')
             const scriptTag = `<script>\n${scriptContent}\n</script>`
-            content = content.replace('</body>', `${scriptTag}\n</body>`)
+            if (lastBodyIdx !== -1) {
+              content = content.slice(0, lastBodyIdx) + scriptTag + '\n' + content.slice(lastBodyIdx)
+            } else {
+              content += `\n${scriptTag}`
+            }
           }
           
           fs.writeFileSync(htmlPath, content, 'utf8')

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import mammoth from 'mammoth';
+import mammoth from 'mammoth/mammoth.browser.js';
 import { 
   Library, 
   PlaySquare, 
