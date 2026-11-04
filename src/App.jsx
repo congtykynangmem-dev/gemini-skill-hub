@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import mammoth from 'mammoth';
 import { 
   Library, 
   PlaySquare, 
@@ -20,7 +21,10 @@ import {
   Edit3,
   Upload,
   X,
-  RefreshCw
+  RefreshCw,
+  Paperclip,
+  FileText,
+  Eye
 } from 'lucide-react';
 
 const INITIAL_SKILLS = [
@@ -153,6 +157,12 @@ export default function App() {
   const [editingSkill, setEditingSkill] = useState(null);
   const [editingToolsText, setEditingToolsText] = useState('');
   const fileInputRef = useRef(null);
+
+  // Chat file attachment state
+  const [attachedFile, setAttachedFile] = useState(null);
+  const [isExtractingFile, setIsExtractingFile] = useState(false);
+  const [showExtractedPreview, setShowExtractedPreview] = useState(false);
+  const chatFileInputRef = useRef(null);
 
   // Create Skill Form State
   const [newSkillName, setNewSkillName] = useState('');
@@ -368,23 +378,121 @@ export default function App() {
     }
   };
 
+  const handleChatFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsExtractingFile(true);
+    const fileName = file.name;
+    const fileSize = file.size;
+    const ext = fileName.split('.').pop()?.toLowerCase();
+
+    try {
+      if (ext === 'docx') {
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        const text = result.value.trim();
+        setAttachedFile({
+          name: fileName,
+          size: fileSize,
+          type: 'docx',
+          textContent: text || '[Tài liệu Word rỗng hoặc không có văn bản thuần]',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        });
+        showToast(`Đã trích xuất ${text.length} ký tự từ file Word "${fileName}"!`);
+      } else if (ext === 'pdf') {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64Data = (reader.result || '').toString().split(',')[1];
+          setAttachedFile({
+            name: fileName,
+            size: fileSize,
+            type: 'pdf',
+            base64Data,
+            mimeType: 'application/pdf',
+            textContent: `[File PDF: ${fileName} - Đã mã hóa base64 để Gemini 1.5 Flash đọc và trích xuất trực tiếp]`
+          });
+          showToast(`Đã đính kèm file PDF "${fileName}" thành công!`);
+          setIsExtractingFile(false);
+        };
+        reader.readAsDataURL(file);
+        return;
+      } else {
+        // txt, md, json, csv, log...
+        const reader = new FileReader();
+        reader.onload = () => {
+          const text = (reader.result || '').toString().trim();
+          setAttachedFile({
+            name: fileName,
+            size: fileSize,
+            type: ext || 'text',
+            textContent: text,
+            mimeType: file.type || 'text/plain'
+          });
+          showToast(`Đã trích xuất ${text.length} ký tự từ file "${fileName}"!`);
+          setIsExtractingFile(false);
+        };
+        reader.readAsText(file);
+        return;
+      }
+    } catch (err) {
+      console.error('Lỗi đọc file:', err);
+      showToast(`Lỗi trích xuất file: ${err.message}`, 'error');
+    } finally {
+      setIsExtractingFile(false);
+      if (chatFileInputRef.current) chatFileInputRef.current.value = '';
+    }
+  };
+
   const handleSendMessage = async (e) => {
     e?.preventDefault();
-    if (!inputMessage.trim() || isLoading) return;
+    if ((!inputMessage.trim() && !attachedFile) || isLoading || isExtractingFile) return;
 
-    const userText = inputMessage.trim();
-    const newMsg = { id: Date.now(), role: 'user', content: userText };
+    const userText = inputMessage.trim() || 'Trích lọc thông tin cốt lõi và tổng hợp nội dung trọng tâm từ văn bản đính kèm.';
+    const currentAttachment = attachedFile ? { ...attachedFile } : null;
+
+    const newMsg = {
+      id: Date.now(),
+      role: 'user',
+      content: userText,
+      attachment: currentAttachment
+    };
+
     setMessages(prev => [...prev, newMsg]);
     setInputMessage('');
+    setAttachedFile(null);
     setIsLoading(true);
 
     if (apiKey.trim()) {
       try {
+        const parts = [];
+        if (currentSkill?.systemInstruction) {
+          parts.push({ text: `[Chỉ thị hệ thống: ${currentSkill.systemInstruction}]` });
+        }
+
+        if (currentAttachment?.base64Data && currentAttachment.mimeType === 'application/pdf') {
+          parts.push({
+            inlineData: {
+              mimeType: 'application/pdf',
+              data: currentAttachment.base64Data
+            }
+          });
+          parts.push({
+            text: `[Văn bản PDF đính kèm: "${currentAttachment.name}"]\n\n[Yêu cầu xử lý từ người dùng]:\n${userText}`
+          });
+        } else if (currentAttachment?.textContent) {
+          parts.push({
+            text: `[Nội dung văn bản đầu vào được trích xuất từ file "${currentAttachment.name}"]:\n---\n${currentAttachment.textContent}\n---\n\n[Yêu cầu xử lý / trích lọc của người dùng]:\n${userText}`
+          });
+        } else {
+          parts.push({ text: userText });
+        }
+
         const payload = {
           contents: [
             {
               role: 'user',
-              parts: [{ text: `${currentSkill?.systemInstruction ? `[Chỉ thị hệ thống: ${currentSkill.systemInstruction}]\n\n` : ''}${userText}` }]
+              parts: parts
             }
           ]
         };
@@ -419,8 +527,15 @@ export default function App() {
       setTimeout(() => {
         let simulatedReply = '';
         const tag = currentSkill?.tag || '';
+        const fileSnippet = currentAttachment?.textContent 
+          ? currentAttachment.textContent.slice(0, 260).replace(/[\r\n]+/g, ' ') 
+          : 'Toàn bộ nội dung văn bản đầu vào';
 
         if (tag === 'Hành chính') {
+          const tríchYếu = currentAttachment 
+            ? `Tổng hợp và xử lý nội dung từ tài liệu đính kèm "${currentAttachment.name}"`
+            : userText.replace(/[\n\r]+/g, ' ').slice(0, 100);
+
           simulatedReply = `**[TÊN CƠ QUAN CHỦ QUẢN]**               **CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM**
 **[TÊN CƠ QUAN BAN HÀNH]**                    **Độc lập - Tự do - Hạnh phúc**
 Số: .../...-[Ký hiệu]                     *[Địa danh], ngày ... tháng ... năm ...*
@@ -428,21 +543,21 @@ Số: .../...-[Ký hiệu]                     *[Địa danh], ngày ... tháng 
 <div align="center">
 
 ### **CÔNG VĂN**
-**Về việc: ${userText.replace(/[\n\r]+/g, ' ').slice(0, 100)}**
+**Về việc: ${tríchYếu}**
 
 </div>
 
-**Kính gửi:** [Tên cơ quan / cá nhân nhận văn bản]
+**Kính gửi:** [Tên cơ quan / đơn vị nhận văn bản]
 
 - [Căn cứ Luật Tổ chức chính quyền địa phương / Luật chuyên ngành liên quan...];
 - [Căn cứ Nghị định số 30/2020/NĐ-CP ngày 05/3/2020 của Chính phủ về công tác văn thư];
-- [Căn cứ Quyết định số .../... của ... quy định chức năng, nhiệm vụ, quyền hạn...];
+- [Căn cứ Quyết định số .../... quy định chức năng, nhiệm vụ, quyền hạn...];${currentAttachment ? `\n- [Căn cứ kết quả trích lọc từ hồ sơ/văn bản: ${currentAttachment.name}];` : ''}
 
-Thực hiện nhiệm vụ được giao, [Tên cơ quan ban hành] kính gửi Quý cơ quan/đơn vị nội dung phối hợp triển khai như sau:
+Thực hiện nhiệm vụ được giao, sau khi nghiên cứu và trích lọc thông tin từ tài liệu đính kèm, [Tên cơ quan ban hành] kính đề nghị Quý đơn vị phối hợp triển khai:
 
 **1. Về nội dung trọng tâm:**
 - Yêu cầu thực hiện: ${userText}
-- Đề nghị các phòng, ban chuyên môn trực thuộc chủ động xây dựng phương án, phân công nhân sự cụ thể để triển khai đúng tiến độ.
+- Nội dung cốt lõi trích lọc từ tài liệu: "${fileSnippet}..."
 
 **2. Về thời hạn và trách nhiệm thực hiện:**
 - Báo cáo kết quả gửi về [Tên cơ quan ban hành] trước ngày [Thời hạn].
@@ -458,13 +573,13 @@ Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
                                                     **[HỌ VÀ TÊN]**
 
 ---
-*(Lưu ý: Đây là văn bản mô phỏng chuẩn Nghị định 30/2020/NĐ-CP. Nhập Gemini API Key ở thanh phía trên để kết nối AI phân tích chi tiết theo loại văn bản và nội dung thực tế của bạn).*`;
+*(Lưu ý: Đã nhận diện và trích lọc thành công file "${currentAttachment ? currentAttachment.name : 'văn bản'}". Nhập Gemini API Key ở ô phía trên để AI phân tích đầy đủ 100% nội dung thực tế).*`;
         } else if (tag === 'Truyền thông') {
-          simulatedReply = `📢 [BẢN TIN NÓNG HỔI / ZALO OA]\n\n✨ ${userText.toUpperCase()} ✨\n\n👉 Bạn đã cập nhật thông tin mới nhất hôm nay chưa?\n🔹 Điểm nhấn 1: Nhanh chóng - Tiện lợi - Chuẩn xác.\n🔹 Điểm nhấn 2: Tối ưu hiệu suất công việc cùng Gemini AI.\n\n👇 Để lại bình luận hoặc nhắn tin trực tiếp để được tư vấn ngay nhé!\n#GeminiSkillHub #TruyenThong #AI`;
+          simulatedReply = `📢 [BẢN TIN NÓNG HỔI / ZALO OA]\n\n✨ TỔNG HỢP NỘI DUNG TỪ ${currentAttachment ? currentAttachment.name.toUpperCase() : userText.toUpperCase()} ✨\n\n👉 Điểm tin nổi bật được trích xuất tự động:\n🔹 ${fileSnippet}...\n\n👇 Xem thêm chi tiết và bình luận bên dưới nhé!\n#GeminiSkillHub #TrichXuatVanBan #AI`;
         } else if (tag === 'Năng suất') {
-          simulatedReply = `📋 [PHÂN TÍCH EMAIL & ĐIỀU PHỐI CÔNG VIỆC]\n\n🎯 Yêu cầu: "${userText}"\n⚡ Mức độ ưu tiên: Cao\n📌 Công việc trích xuất:\n  1. [ ] Phản hồi thông tin xác nhận cho đối tác (Hạn: 17h00 hôm nay)\n  2. [ ] Phối hợp phòng ban chuẩn bị tài liệu liên quan\n  3. [ ] Lên lịch hẹn kiểm tra tiến độ dự án`;
+          simulatedReply = `📋 [PHÂN TÍCH VĂN BẢN & ĐIỀU PHỐI CÔNG VIỆC]\n\n🎯 Tài liệu xử lý: "${currentAttachment ? currentAttachment.name : userText}"\n⚡ Mức độ ưu tiên: Cao\n📌 Công việc trích xuất từ tài liệu:\n  1. [ ] Rà soát các mốc thời gian và yêu cầu báo cáo trong văn bản\n  2. [ ] Phân công các đầu mối chuyên trách phụ trách từng hạng mục\n  3. [ ] Hoàn tất dự thảo phản hồi trước thời hạn quy định\n\n🔍 Dữ liệu văn bản ghi nhận: ${fileSnippet}...`;
         } else {
-          simulatedReply = `Chào bạn! Tôi đang hoạt động dưới vai trò **${currentSkill?.name || 'Trợ lý'}**.\n\nTôi đã ghi nhận yêu cầu: "${userText}".\n\n📌 Gợi ý xử lý: Căn cứ theo quy định hiện hành, bạn cần rà soát kỹ các điều khoản và thông số kỹ thuật liên quan.\n\n*(Mẹo: Hãy dán Gemini API Key ở ô phía trên để nhận câu trả lời phân tích chuyên sâu đầy đủ từ Gemini 1.5 Flash)*`;
+          simulatedReply = `Chào bạn! Tôi đã tiếp nhận yêu cầu "${userText}"${currentAttachment ? ` cùng với file đính kèm **${currentAttachment.name}**` : ''}.\n\n📌 Kết quả trích lọc sơ bộ: Đã đọc thành công nội dung văn bản (${fileSnippet.slice(0, 100)}...). Dữ liệu sẵn sàng xử lý theo kỹ năng **${currentSkill?.name || 'Trợ lý'}**.\n\n*(Mẹo: Dán Gemini API Key ở ô phía trên để Gemini 1.5 Flash tự động phân tích sâu toàn bộ văn bản)*`;
         }
 
         setMessages(prev => [...prev, { id: Date.now() + 1, role: 'assistant', content: simulatedReply }]);
@@ -844,6 +959,27 @@ Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
                           : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none'
                       }`}
                     >
+                      {msg.attachment && (
+                        <div className="mb-2.5 p-2 bg-blue-700/80 rounded-lg flex items-center justify-between gap-2 text-xs border border-blue-400/40">
+                          <div className="flex items-center gap-2 truncate">
+                            <FileText size={15} className="text-blue-200 flex-shrink-0" />
+                            <span className="font-semibold truncate">{msg.attachment.name}</span>
+                            <span className="text-blue-200 text-[11px] whitespace-nowrap">({Math.round(msg.attachment.size / 1024)} KB)</span>
+                          </div>
+                          {msg.attachment.textContent && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAttachedFile(msg.attachment);
+                                setShowExtractedPreview(true);
+                              }}
+                              className="text-[11px] text-blue-200 hover:text-white underline whitespace-nowrap"
+                            >
+                              Xem nội dung
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {msg.content}
                     </div>
                   </div>
@@ -891,8 +1027,78 @@ Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
                 </div>
               )}
 
+              {/* Attachment chip if file is attached */}
+              {attachedFile && (
+                <div className="px-4 py-2.5 bg-blue-50/90 border-t border-blue-100 flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 truncate">
+                    <div className="w-6 h-6 rounded bg-blue-600 text-white flex items-center justify-center flex-shrink-0 shadow-xs">
+                      <FileText size={13} />
+                    </div>
+                    <span className="font-bold text-slate-800 truncate">{attachedFile.name}</span>
+                    <span className="text-slate-500 text-[11px]">({Math.round(attachedFile.size / 1024)} KB)</span>
+                    <span className="hidden sm:inline bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded uppercase">
+                      {attachedFile.type}
+                    </span>
+                    {attachedFile.textContent && (
+                      <span className="text-emerald-700 font-medium text-[11px] hidden md:inline">
+                        ✓ Đã trích xuất {attachedFile.textContent.length} ký tự
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {attachedFile.textContent && (
+                      <button
+                        type="button"
+                        onClick={() => setShowExtractedPreview(true)}
+                        className="px-2.5 py-1 bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 rounded text-[11px] font-semibold flex items-center gap-1 transition shadow-xs"
+                      >
+                        <Eye size={12} />
+                        <span>Xem trích xuất</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setAttachedFile(null)}
+                      className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition"
+                      title="Gỡ file đính kèm"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {isExtractingFile && (
+                <div className="px-4 py-2 bg-amber-50 border-t border-amber-100 flex items-center gap-2 text-xs text-amber-800 font-medium">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+                  <span>Đang đọc và trích xuất dữ liệu từ văn bản đính kèm...</span>
+                </div>
+              )}
+
               {/* Chat Input */}
               <form onSubmit={handleSendMessage} className="p-4 bg-white border-t border-slate-200 flex items-end gap-2">
+                <input
+                  type="file"
+                  ref={chatFileInputRef}
+                  onChange={handleChatFileSelect}
+                  accept=".docx,.doc,.txt,.pdf,.md,.json,.csv"
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => chatFileInputRef.current?.click()}
+                  disabled={isLoading || isExtractingFile}
+                  className={`p-3 rounded-xl border transition flex items-center justify-center flex-shrink-0 shadow-xs ${
+                    attachedFile 
+                      ? 'bg-blue-50 text-blue-600 border-blue-300 hover:bg-blue-100' 
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-blue-600'
+                  }`}
+                  title="Đính kèm văn bản đầu vào (.docx, .pdf, .txt, .md, .csv...)"
+                >
+                  <Paperclip size={18} />
+                </button>
+
                 <textarea
                   rows="2"
                   value={inputMessage}
@@ -903,12 +1109,16 @@ Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
                       handleSendMessage(e);
                     }
                   }}
-                  placeholder={`Gửi yêu cầu thử nghiệm cho "${currentSkill?.name || 'Trợ lý'}"... (Shift+Enter để xuống dòng, Enter để gửi)`}
+                  placeholder={
+                    attachedFile
+                      ? `Yêu cầu trích lọc / xử lý file "${attachedFile.name}"... (hoặc Enter để trích lọc tự động)`
+                      : `Gửi yêu cầu thử nghiệm cho "${currentSkill?.name || 'Trợ lý'}"... (Shift+Enter để xuống dòng, Enter để gửi)`
+                  }
                   className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition resize-none"
                 />
                 <button
                   type="submit"
-                  disabled={!inputMessage.trim() || isLoading}
+                  disabled={(!inputMessage.trim() && !attachedFile) || isLoading || isExtractingFile}
                   className="bg-blue-600 text-white px-5 py-3 rounded-xl font-medium text-sm flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-md shadow-blue-600/20 self-stretch justify-center"
                 >
                   <span>Gửi</span>
@@ -1159,6 +1369,64 @@ Kính mong nhận được sự phối hợp chặt chẽ của Quý cơ quan./.
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Extracted Text Preview Modal */}
+      {showExtractedPreview && attachedFile && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shadow-xs">
+                  <FileText size={16} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">Nội Dung Văn Bản Đã Trích Xuất</h3>
+                  <p className="text-[11px] text-slate-500">{attachedFile.name} ({Math.round(attachedFile.size / 1024)} KB)</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowExtractedPreview(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 flex-1 overflow-y-auto bg-slate-50/50">
+              <pre className="text-xs font-mono text-slate-800 whitespace-pre-wrap leading-relaxed bg-white p-4 rounded-xl border border-slate-200 shadow-inner max-h-[50vh] overflow-y-auto select-text">
+                {attachedFile.textContent || 'Không có nội dung văn bản thuần trích xuất.'}
+              </pre>
+            </div>
+
+            <div className="p-4 border-t border-slate-200 bg-white flex items-center justify-between">
+              <span className="text-xs text-slate-500">
+                Độ dài: <strong className="text-slate-800">{attachedFile.textContent ? attachedFile.textContent.length : 0}</strong> ký tự
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInputMessage(prev => `${prev ? `${prev}\n\n` : ''}${attachedFile.textContent}`);
+                    setShowExtractedPreview(false);
+                    showToast('Đã chèn nội dung trích xuất vào khung chat!');
+                  }}
+                  className="px-3.5 py-1.5 text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 rounded-lg transition"
+                >
+                  Chèn vào khung chat
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowExtractedPreview(false)}
+                  className="px-4 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition"
+                >
+                  Đóng
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
