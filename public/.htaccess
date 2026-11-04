@@ -1,0 +1,28 @@
+# ========================================================
+# Cấu hình máy chủ Apache / Litespeed cho Hosting Mắt Bão
+# ========================================================
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Không chuyển hướng nếu file hoặc thư mục thực sự tồn tại
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Chuyển hướng các đường dẫn ảo của Single Page App về index.html
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# Cung cấp đúng định dạng MIME cho file JS module và CSS
+<IfModule mod_mime.c>
+  AddType application/javascript .js .mjs
+  AddType text/css .css
+  AddType text/html .html
+  AddType application/json .json
+</IfModule>
+
+# Tối ưu nén Gzip giúp tải nhanh
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css application/javascript application/json
+</IfModule>
